@@ -1,0 +1,171 @@
+name: Command event preflight
+on:
+  push:
+    branches: [codex/validate-command-event]
+permissions:
+  contents: read
+env:
+  PATCH_SHA: ee5bb84bc5a6e4ac51711e48442df71f353f933e
+  BASE_SHA: 5d15e951bc86eb97a09cdbf56cbe1226b992c863
+  TYPESCRIPT_SHA: a0a0ff55cab4a1f81b7123ab219c97a2f1ed703d
+jobs:
+  generator:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [baseline, patch, merge]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ee5bb84bc5a6e4ac51711e48442df71f353f933e
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify contribution and select test revision
+        env:
+          REVISION: ${{ matrix.revision }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$PATCH_SHA"
+          git show "$PATCH_SHA:unittests/files/command-event.ts" > "$RUNNER_TEMP/command-event.ts"
+          if [ "$REVISION" = baseline ]; then
+            git checkout "$BASE_SHA"
+          elif [ "$REVISION" = merge ]; then
+            git checkout "$BASE_SHA"
+            git -c user.name=Preflight -c user.email=preflight@example.invalid merge --no-ff --no-edit "$PATCH_SHA"
+          fi
+          git rev-parse HEAD
+          git log -1 --format='%H %P'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: node --version && npm --version
+      - run: npm ci
+      - run: npm run build
+      - name: Verify regression fails only on baseline
+        env:
+          REVISION: ${{ matrix.revision }}
+        run: |
+          set +e
+          npx tsc generated/dom.generated.d.ts "$RUNNER_TEMP/command-event.ts" --target es2020 --lib es2020 --types --noEmit --ignoreConfig > "$RUNNER_TEMP/regression.log" 2>&1
+          result=$?
+          set -e
+          cat "$RUNNER_TEMP/regression.log"
+          if [ "$REVISION" = baseline ]; then
+            test "$result" = 2
+            grep -q "Property 'command' does not exist on type 'Event'" "$RUNNER_TEMP/regression.log"
+          else
+            test "$result" = 0
+          fi
+      - run: npm test
+      - run: npx tsgo
+      - run: git diff --exit-code && git diff --check
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, javascript-typescript]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ee5bb84bc5a6e4ac51711e48442df71f353f933e
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "$PATCH_SHA"
+      - uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3
+        with:
+          category: /language:${{ matrix.language }}
+  downstream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [baseline, patch]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ matrix.revision == 'baseline' && '5d15e951bc86eb97a09cdbf56cbe1226b992c863' || 'ee5bb84bc5a6e4ac51711e48442df71f353f933e' }}
+          persist-credentials: false
+      - name: Record generator SHA
+        run: git rev-parse HEAD
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: microsoft/TypeScript
+          ref: a0a0ff55cab4a1f81b7123ab219c97a2f1ed703d
+          path: TypeScript
+          persist-credentials: false
+      - run: test "$(git -C TypeScript rev-parse HEAD)" = "$TYPESCRIPT_SHA"
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+        with:
+          go-version-file: TypeScript/go.work
+          cache-dependency-path: TypeScript/tsc/go.sum
+      - run: npm run migrate
+      - run: npm ci
+        working-directory: TypeScript
+      - name: Run downstream tests and preserve raw result
+        working-directory: TypeScript
+        run: |
+          mkdir -p ../evidence
+          node --version > ../evidence/versions.txt
+          npm --version >> ../evidence/versions.txt
+          go version >> ../evidence/versions.txt
+          git rev-parse HEAD > ../evidence/typescript-sha.txt
+          set +e
+          npm test > ../evidence/tests.log 2>&1
+          result=$?
+          set -e
+          echo "$result" > ../evidence/exit-status.txt
+          tail -40 ../evidence/tests.log
+          echo "Raw downstream test exit status: $result"
+          npx hereby baseline-accept
+          git diff -- tsc/testdata/baselines/reference > ../evidence/compiler-baselines.diff
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          text=Path('../evidence/tests.log').read_text()
+          text=re.sub(r'\x1b\[[0-9;]*m','',text)
+          failures=sorted(set(re.findall(r'^=== FAIL: (.+?) \(',text,re.M)))
+          Path('../evidence/failures.txt').write_text('\n'.join(failures)+'\n')
+          print(f'Downstream failures: {len(failures)}')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: downstream-${{ matrix.revision }}
+          path: evidence
+  compare-downstream:
+    runs-on: ubuntu-latest
+    needs: downstream
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: evidence
+      - name: Compare actual baseline and patch test results
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          a=Path('evidence/downstream-baseline')
+          b=Path('evidence/downstream-patch')
+          for name in ['exit-status.txt','typescript-sha.txt','failures.txt','compiler-baselines.diff']:
+              assert (a/name).read_bytes()==(b/name).read_bytes(), f'Patch changed downstream result: {name}'
+          status=(b/'exit-status.txt').read_text().strip()
+          failures=(b/'failures.txt').read_text().splitlines()
+          print(f'Identical downstream results. Raw test exit={status}; failures={len(failures)}.')
+          print('No patch regression detected; a nonzero raw status remains a baseline failure, not a passing test suite.')
+          PY
