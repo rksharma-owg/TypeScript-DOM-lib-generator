@@ -5,9 +5,9 @@ on:
 permissions:
   contents: read
 env:
-  PATCH_SHA: ee5bb84bc5a6e4ac51711e48442df71f353f933e
+  PATCH_SHA: 3229bab902b6d472aa7ad058cdc6c8cb479aa96d
   BASE_SHA: 5d15e951bc86eb97a09cdbf56cbe1226b992c863
-  TYPESCRIPT_SHA: a0a0ff55cab4a1f81b7123ab219c97a2f1ed703d
+  TYPESCRIPT_SHA: 6c976dad5d65d2c67f5707f3ba4a04ae991b8481
 jobs:
   generator:
     runs-on: ubuntu-latest
@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: ee5bb84bc5a6e4ac51711e48442df71f353f933e
+          ref: 3229bab902b6d472aa7ad058cdc6c8cb479aa96d
           fetch-depth: 0
           persist-credentials: false
       - name: Verify contribution and select test revision
@@ -74,7 +74,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: ee5bb84bc5a6e4ac51711e48442df71f353f933e
+          ref: 3229bab902b6d472aa7ad058cdc6c8cb479aa96d
           persist-credentials: false
       - run: test "$(git rev-parse HEAD)" = "$PATCH_SHA"
       - uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3
@@ -94,7 +94,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: ${{ matrix.revision == 'baseline' && '5d15e951bc86eb97a09cdbf56cbe1226b992c863' || 'ee5bb84bc5a6e4ac51711e48442df71f353f933e' }}
+          ref: ${{ matrix.revision == 'baseline' && '5d15e951bc86eb97a09cdbf56cbe1226b992c863' || '3229bab902b6d472aa7ad058cdc6c8cb479aa96d' }}
           persist-credentials: false
       - name: Record generator SHA
         run: git rev-parse HEAD
@@ -107,7 +107,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           repository: microsoft/TypeScript
-          ref: a0a0ff55cab4a1f81b7123ab219c97a2f1ed703d
+          ref: 6c976dad5d65d2c67f5707f3ba4a04ae991b8481
           path: TypeScript
           persist-credentials: false
       - run: test "$(git -C TypeScript rev-parse HEAD)" = "$TYPESCRIPT_SHA"
